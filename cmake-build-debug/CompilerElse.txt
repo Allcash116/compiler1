@@ -1,0 +1,370 @@
+#include <iostream>
+#include <fstream>
+#include <sstream>
+#include <string>
+#include <vector>
+#include <set>
+#include <numeric>
+
+using namespace std;
+
+// Tokenizer function
+vector<string> lexer(const string& text) {
+    vector<string> tokens;
+    string token;
+    bool is_double = false;
+    string spec = "-+=/*<>%&| ()@!";
+    string d_spec = "<>=!";
+
+    for (char ch : text) {
+        if (spec.find(ch) != std::string::npos) {
+            if (is_double && (d_spec.find(ch) != std::string::npos)) {
+                tokens.back() += ch;
+            }
+            else {
+                if (!token.empty()) {
+                    tokens.push_back(token);
+                    token.clear();
+                }
+                if (ch != ' ') {
+                    tokens.push_back(string(1, ch));
+                    is_double = true;
+                }
+            }
+        } else {
+            is_double = false;
+            token += ch;
+        }
+    }
+    if (!token.empty()) {
+        tokens.push_back(token);
+    }
+
+    return tokens;
+}
+
+// Node class for the expression tree
+class Node {
+public:
+    string value;
+    int level;
+    string nodetype;
+    int parent = -1;
+    int left = -1;
+    int right = -1;
+
+    Node(const string token, int levell) : value(token), level(levell) {
+        nodetype = findType(token);
+    }
+
+    string findType(const string& token) {
+        static set<string> operators = {"+", "-", "*", "/", ">", "<", "%", "|", "&", ">=", "<=", "==", "!="};
+        if (operators.find(token) != operators.end()) {
+            return "Operator";
+        }
+        else {
+            return "Value";
+        }
+    }
+};
+
+// Tree class to represent the expression
+class Tree {
+public:
+    vector<Node> tree;
+    int root = -1;
+
+    void pull(const vector<string>* tokens) {
+        int len;
+        int prev_node;
+        int new_node;
+
+        int level_count = 0;
+        for (const auto& token : *tokens) {
+            if (token == "(") {
+                level_count++;
+                continue;
+            }
+            if (token == ")") {
+                level_count--;
+                continue;
+            }
+            Node node(token, level_count);
+
+            tree.push_back(node);
+
+            len = tree.size();
+            new_node = len - 1;
+
+            if (len == 1) {
+                root = new_node;
+                continue;
+            }
+            prev_node = len - 2;
+
+            if (len == 2) {
+                root = new_node;
+                tree[new_node].right = prev_node;
+                tree[prev_node].parent = new_node;
+                continue;
+            }
+            if (tree[prev_node].nodetype == "Operator") {
+                tree[prev_node].left = tree[prev_node].right;
+                tree[prev_node].right = new_node;
+                tree[new_node].parent = prev_node;
+            } else {
+                while (tree[prev_node].level > tree[new_node].level) {
+                    if (tree[prev_node].parent != -1) {
+                        prev_node = tree[prev_node].parent;
+                    } else {
+                        break;
+                    }
+                }
+                if (tree[prev_node].nodetype != "Operator") {
+                    prev_node = tree[prev_node].parent;
+                }
+                if (tree[prev_node].level > tree[new_node].level || (tree[prev_node].level == tree[new_node].level && !(!(tree[prev_node].value == "*" || tree[prev_node].value == "/" || tree[prev_node].value == "%" || tree[prev_node].value == "&") && (tree[new_node].value == "*" || tree[new_node].value == "/" || tree[new_node].value == "%" || tree[new_node].value == "&")))) {
+                    if (tree[prev_node].parent != -1) {
+                        int parent = tree[prev_node].parent;
+                        tree[parent].right = new_node;
+                        tree[new_node].parent = parent;
+                        tree[prev_node].parent = new_node;
+                        tree[new_node].right = prev_node;
+
+                    } else {
+                        root = new_node;
+                        tree[new_node].right = prev_node;
+                        tree[prev_node].parent = new_node;
+                    }
+                } else {
+                    int right = tree[prev_node].right;
+                    tree[right].parent = new_node;
+                    tree[new_node].right = tree[prev_node].right;
+                    tree[prev_node].right = new_node;
+                    tree[new_node].parent = prev_node;
+                }
+            }
+        }
+    }
+};
+
+int lab_count = 0;
+
+
+void push_node(const Tree* tree, int new_node, vector<string>* main) {
+    if (tree->tree[new_node].nodetype != "Operator") {
+        main->push_back("push " + tree->tree[new_node].value + "\n");
+    }
+    else {
+        push_node(tree, tree->tree[new_node].right, main);
+        push_node(tree, tree->tree[new_node].left, main);
+
+        string operation;
+        if (tree->tree[new_node].value == "+") {
+            operation = "add";
+        } else if (tree->tree[new_node].value == "-") {
+            operation = "sub";
+        } else if (tree->tree[new_node].value == "*") {
+            operation = "imul";
+        } else if (tree->tree[new_node].value == "|") {
+            operation = "or";
+        } else if (tree->tree[new_node].value == "&") {
+            operation = "and";
+        } else if (tree->tree[new_node].value == ">" || tree->tree[new_node].value == "<" || tree->tree[new_node].value == ">=" || tree->tree[new_node].value == "<=" || tree->tree[new_node].value == "==" || tree->tree[new_node].value == "!=") {
+            operation = "cmp";
+        } else if (tree->tree[new_node].value == "%" || tree->tree[new_node].value == "/") {
+            operation = "idiv";
+        }
+
+        main->push_back("pop eax\n");
+
+        if (operation == "idiv") {
+            main->push_back("cdq\n");
+        }
+
+        main->push_back("pop ebx\n");
+        main->push_back(operation + " ");
+
+        if (operation == "idiv") {
+            main->push_back("ebx\n");
+            if (tree->tree[new_node].value == "%") {
+                main->push_back("push edx\n");
+            } else {
+                main->push_back("push eax\n");
+            }
+        } else {
+            main->push_back("eax, ebx\n");
+            if (operation == "cmp") {
+                string jump;
+                if (tree->tree[new_node].value == ">") {
+                    jump = "ja";
+                } else if (tree->tree[new_node].value == "<") {
+                    jump = "jl";
+                } else if (tree->tree[new_node].value == "==") {
+                    jump = "je";
+                } else if (tree->tree[new_node].value == ">=") {
+                    jump = "jge";
+                } else if (tree->tree[new_node].value == "<=") {
+                    jump = "jle";
+                } else if (tree->tree[new_node].value == "!=") {
+                    jump = "jne";
+                } else {
+                    jump = "jmp";
+                }
+                main->push_back(jump + " pos" + to_string(lab_count) + "\n");
+                main->push_back("push 0\n");
+                main->push_back("jmp neg" + to_string(lab_count) + "\n");
+                main->push_back("pos" + to_string(lab_count) + ":\n");
+                main->push_back("push 1\n");
+                main->push_back("neg" + to_string(lab_count) + ":\n");
+                lab_count++;
+            } else {
+                main->push_back("push eax\n");
+            }
+        }
+    }
+}
+
+void tree_to_asm(const Tree* tree, vector<string>* main) {
+    push_node(tree, tree->root, main);
+}
+
+void calculate(const vector<string>* tokens, vector<string>* main) {
+    Tree tree;
+    tree.pull(tokens);
+    tree_to_asm(&tree, main);
+}
+
+int main() {
+
+    ifstream infile("Test.testik");
+    if (!infile.is_open()) {
+        cerr << "Error: Unable to open file Test.testik" << endl;
+        return 1;
+    }
+
+    stringstream buffer;
+    buffer << infile.rdbuf();
+    string code = buffer.str();
+    infile.close();
+
+    vector<string> lines;
+    string line;
+
+
+    set<string> init_vars;
+    vector<string> data = {"TITLE ;KOvrigin vladislav m3o-232b-22\nINCLUDE Irvine32.inc\n\n.data\n"};
+    vector<string> main = {".code\nmain PROC\n"};
+    vector<string> end = {"exit\nmain ENDP\n\nEND main\n"};
+    vector<string> pool;
+
+    int i = 0;
+    int loop_count = 0;
+    while(i < code.length()) {
+        if (code[i] != '\n') {
+            line = line + code[i];
+            i++;
+        }
+        else {
+            cout << "Получена линия!";
+            lines.push_back(line);
+            line = "";
+            i++;
+        }
+    }
+    i = 0;
+    while (i < lines.size()) {
+        vector<string> tokens = lexer(lines[i]);
+
+        if (tokens.empty()) {
+            i++;
+            continue;
+        }
+
+        if (tokens[0] == ".") {
+            main.push_back(pool.back());
+            pool.pop_back();
+            i++;
+            continue;
+        }
+
+        if (tokens[0] == "while") {
+            tokens.erase(tokens.begin());
+            main.push_back("LOOP" + to_string(loop_count) + ":\n");
+            calculate(&tokens, &main);
+            main.push_back("pop eax\ncmp eax, 0\njne START" + to_string(lab_count) + "\njmp END" + to_string(lab_count) + "\n");
+            main.push_back("START" + to_string(lab_count) + ":\n");
+            pool.push_back("jmp LOOP" + to_string(loop_count) + "\nEND" + to_string(lab_count) + ":\n");
+            loop_count++;
+            lab_count++;
+        } else if (tokens[0] == "if") {
+            tokens.erase(tokens.begin());
+            calculate(&tokens, &main);
+            main.push_back("pop eax\ncmp eax, 0\njne START" + to_string(lab_count) + "\njmp Else" + to_string(lab_count) + "\n");
+            main.push_back("START" + to_string(lab_count) + ":\n");
+            pool.push_back("END" + to_string(lab_count) + ":\n");
+            lab_count++;
+
+        }else if (tokens[0] == "else") {
+            main.push_back("pop eax\ncmp eax, 0 \njmp END" + to_string(lab_count) + "\n");
+            main.push_back("Else" + to_string(lab_count - 2) + ":\n");
+            pool.push_back("END" + to_string(lab_count) + ":\n");
+            lab_count++;
+        }else if (tokens[0] == "print") {
+            tokens.erase(tokens.begin());
+            calculate(&tokens, &main);
+            main.push_back("pop eax\ncall WriteInt\ncall Crlf\n");
+        }
+        else if (tokens[0] == "prints") {
+            tokens.erase(tokens.begin());
+            std::string result = std::accumulate(tokens.begin(), tokens.end(), std::string());
+
+            for (int j = tokens.size() - 1; j >= 0; j--)
+            {
+                string word = tokens[j];
+                main.push_back("push ' '\n");
+                for (int p = word.length() - 1; p >= 0; p--)
+                {
+                    main.push_back("push " + to_string(word[p]) + "\n");
+                }
+            }
+            main.push_back("mov ecx, " + to_string(result.length() + tokens.size()) + "\nprint_Loop" + to_string(lab_count) + ":\npop eax\ncall WriteChar\nloop print_Loop" + to_string(lab_count) + "\n");
+            main.push_back("call crlf\n");
+            lab_count++;
+        }
+        else {
+            string name = tokens[0];
+            tokens.erase(tokens.begin(), tokens.begin() + 2);
+
+            if (init_vars.find(name) == init_vars.end()) {
+                init_vars.insert(name);
+                data.push_back(name + " dd ?\n");
+            }
+
+            calculate(&tokens, &main);
+            main.push_back("pop eax\nmov " + name + ", eax\n");
+        }
+
+        i++;
+        main.push_back("\n");
+    }
+
+
+    ofstream outfile("compiler.asm");
+    if (!outfile.is_open()) {
+        cerr << "Error: Unable to open file compiler.asm" << endl;
+        return 1;
+    }
+    for (const auto& line : data) {
+        outfile << line;
+    }
+    for (const auto& line : main) {
+        outfile << line;
+    }
+    for (const auto& line : end) {
+        outfile << line;
+    }
+    outfile.close();
+
+    return 0;
+}
